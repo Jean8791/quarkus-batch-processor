@@ -121,8 +121,31 @@ The codebase is organized into the following packages:
 
 Example of configuring a batch job:
 
-java @Inject FastRecordProcessor processor;
-ProcessingResult result = processor .source(CustomerEntity.class) .query("select c from CustomerEntity c where c.active = true") .chunkSize(1000) .transactionMode(CHUNK) .onError(CONTINUE_ON_ERROR) .retryStrategy(/* retry configuration */) .onProcess(customer -> recalculateScore(customer)) .onRecordError((customer, error) -> log.error("Error processing record", error)) .run();
+```java
+import br.com.codenest.config.ErrorStrategy;
+import br.com.codenest.config.TransactionMode;
+import br.com.codenest.engine.FastRecordProcessor;
+import br.com.codenest.result.ProcessingResult;
+import jakarta.inject.Inject;
+
+class CustomerJob {
+
+    @Inject
+    FastRecordProcessor processor;
+
+    void run() {
+        ProcessingResult result = processor
+                .source(CustomerEntity.class)
+                .query("select c from CustomerEntity c where c.active = true")
+                .chunkSize(1000)
+                .transactionMode(TransactionMode.CHUNK)
+                .onError(ErrorStrategy.CONTINUE_ON_ERROR)
+                .onProcess(this::recalculateScore)
+                .onRecordError((customer, error) -> log.error("Error processing record", error))
+                .run();
+    }
+}
+```
 
 
 The engine streams the records, processes them in chunks, and returns a final execution summary.
@@ -157,6 +180,14 @@ These metrics help monitor throughput and operational behavior during long-runni
 - Java 17+
 - Quarkus 3+
 - Hibernate ORM
+
+## Configuration
+
+The datasource is resolved from environment variables by default:
+
+- `QUARKUS_DATASOURCE_JDBC_URL`
+- `QUARKUS_DATASOURCE_USERNAME`
+- `QUARKUS_DATASOURCE_PASSWORD`
 
 ## Documentation
 
