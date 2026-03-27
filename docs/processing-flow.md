@@ -1,234 +1,248 @@
-# Processing Flow
+# Fluxo de Processamento
 
-This document describes how a batch job is executed from configuration to final result.
+Este documento descreve como um job batch é executado, da configuração até o resultado final.
 
-The goal is to explain the runtime behavior of the engine in a step-by-step way.
+O objetivo é explicar o comportamento do motor em tempo de execução, passo a passo.
 
-## Overview
+## Visão geral
 
-A processing job follows this high-level flow:
+Um job segue este fluxo em alto nível:
 
-Application code ↓ Processor configuration ↓ run() ↓ Query execution ↓ Streaming iteration ↓ Chunk formation ↓ Chunk processing ↓ Error handling and retries ↓ Metrics and final result
+Código da aplicação
+↓
+Configuração do processor
+↓
+`run()`
+↓
+Execução da query
+↓
+Iteração em streaming
+↓
+Formação de chunks
+↓
+Processamento
+↓
+Tratamento de erro e retry
+↓
+Métricas e resultado final
 
+O modelo de execução é sequencial e orientado a chunks.
 
-The execution model is sequential and chunk-oriented.
+## Etapa 1 — Configuração do job
 
-## Step 1 — Job configuration
+O processo começa quando o código da aplicação configura uma instância do processor por meio da API fluente.
 
-The process begins when application code configures a processor instance through the fluent API.
+A configuração típica inclui:
 
-Typical configuration includes:
+- definição de query HQL
+- definição de query nativa
+- `rowMapper` para query nativa
+- parâmetros da query
+- tamanho do chunk
+- modo transacional
+- callback de processamento
+- estratégia de erro
+- estratégia de retry
+- listener de conclusão de chunk
+- comportamento de logging
+- nome do processor
 
-- query definition
-- native query definition
-- row mapping for native query scenarios
-- query parameters
-- chunk size
-- transaction mode
-- processing callback
-- error strategy
-- retry strategy
-- chunk completion listener
-- logging behavior
-- processor name
+Nesta etapa, o job ainda está apenas sendo descrito. Nenhum registro foi processado.
 
-At this stage, the job is only being described. No records are processed yet.
+## Etapa 2 — Início da execução com `run()`
 
-## Step 2 — Execution starts with `run()`
+O processamento de fato começa quando `run()` é chamado.
 
-The actual processing begins when `run()` is called.
+Neste ponto, o motor:
 
-At this point, the engine:
+- valida as opções configuradas
+- resolve valores padrão quando necessário
+- prepara o contexto de execução
+- inicializa logging e coleta de métricas
 
-- validates the configured options
-- resolves default values where necessary
-- prepares the execution context
-- initializes logging and metrics collection
+Se alguma configuração obrigatória estiver ausente, a execução para antes de acessar o banco.
 
-If required configuration is missing, execution stops before any database work begins.
+## Etapa 3 — Preparação da query
 
-## Step 3 — Query preparation
+Depois da validação, o motor prepara a origem dos dados para iteração.
 
-After validation, the engine prepares the data source for iteration.
+Dependendo da configuração, ele pode executar:
 
-Depending on configuration, it may execute:
+- uma query HQL
+- uma query SQL nativa
 
-- an HQL query
-- a native SQL query
+Se o modo nativo for usado, o `rowMapper` transforma a linha bruta no tipo alvo do processamento.
 
-If native query mode is used, row mapping is applied so raw database rows can be transformed into the target processing type.
+Os parâmetros são aplicados antes do início da iteração.
 
-Query parameters are applied before iteration begins.
+## Etapa 4 — Iteração em streaming
 
-## Step 4 — Streaming record iteration
+Quando a query está pronta, o motor passa a ler os registros progressivamente, em vez de materializar todo o resultado em memória.
 
-Once the query is ready, the engine starts reading records progressively instead of materializing the entire result set in memory.
+Nesta fase, ele:
 
-This stage is responsible for:
+- abre a origem iterável
+- lê os registros um a um
+- expõe esses registros por meio de um iterador
 
-- opening the iteration source
-- reading records one by one
-- exposing records through an iterator abstraction
+Esse é um ponto central do comportamento de memória do motor, pois apenas um conjunto limitado de registros fica em memória a cada momento.
 
-This is a key part of the engine’s memory behavior, since only a limited working set is kept in memory at any time.
+## Etapa 5 — Formação do chunk
 
-## Step 5 — Chunk formation
+À medida que os registros são lidos, eles são acumulados em um buffer até que o tamanho configurado do chunk seja atingido.
 
-As records are read, they are accumulated into an in-memory buffer until the configured chunk size is reached.
+Exemplo:
 
-For example:
+- se o chunk for `1000`, o motor acumula até 1000 registros
+- quando o chunk enche, ele é enviado para processamento
+- depois do processamento, um novo buffer é criado
+- se a entrada acabar antes de encher o chunk, o chunk parcial final também é processado
 
-- if chunk size is `1000`, the engine collects up to 1000 records
-- once the chunk is full, it is sent for processing
-- after processing, a new chunk buffer is created
-- if the input ends before the chunk is full, the final partial chunk is still processed
+Esse modelo mantém a memória limitada sem abrir mão de eficiência.
 
-This model keeps memory bounded while still allowing efficient batch execution.
+## Etapa 6 — Processamento do chunk
 
-## Step 6 — Chunk processing
+Quando um chunk fica pronto, o motor delega sua execução ao processador de chunk.
 
-When a chunk is ready, the engine delegates it to the chunk processor.
+Nesta etapa:
 
-At this stage:
+- cada registro do chunk é enviado ao callback configurado
+- contadores como processados, erros e retries são atualizados
+- hooks de conclusão podem ser acionados ao final do chunk
 
-- each record in the chunk is passed to the configured processing callback
-- counters such as processed items, errors, and retries are updated
-- chunk-level completion hooks may be triggered after processing
+É aqui que a lógica de negócio do consumidor realmente acontece.
 
-Chunk processing is the stage where the user’s business logic is actually executed.
+## Etapa 7 — Retry
 
-## Step 7 — Retry behavior
+Se a tentativa de processar um registro falhar, o motor pode tentar novamente conforme a política configurada.
 
-If a record processing attempt fails, the engine may retry it depending on the configured retry policy.
+O comportamento típico de retry inclui:
 
-Typical retry behavior includes:
+- verificar se a exceção é elegível para retry
+- limitar o número de tentativas
+- aguardar entre tentativas, quando houver delay
 
-- evaluating whether the exception is retryable
-- limiting retry attempts
-- waiting between attempts if a delay is configured
+Se o processamento tiver sucesso após retry, a execução segue normalmente e o contador de retries é atualizado.
 
-If processing succeeds after a retry, execution continues normally and retry counters are updated.
+Se o retry se esgotar, a falha é tratada conforme a estratégia de erro.
 
-If retry conditions are exhausted, the failure is handled according to the configured error strategy.
+## Etapa 8 — Tratamento de erro
 
-## Step 8 — Error handling
+Quando um registro não pode ser processado com sucesso, o motor aplica a estratégia de erro configurada.
 
-When a record cannot be processed successfully, the engine applies the configured error strategy.
+Resultados típicos:
 
-Typical outcomes include:
+- interromper a execução imediatamente
+- continuar para o próximo registro
+- notificar um handler de erro por registro
 
-- stopping execution immediately
-- continuing with the next record
-- notifying a record-level error handler
+Isso permite atender tanto jobs estritos quanto jobs tolerantes a falhas.
 
-This makes it possible to support both strict jobs and tolerant jobs.
+Exemplos:
 
-Examples:
+- migrações podem optar por continuar e registrar falhas
+- conciliações críticas podem optar por falhar imediatamente
 
-- migration jobs may choose to continue and log failures
-- financial or critical reconciliation jobs may choose to fail fast
+## Etapa 9 — Tratamento transacional
 
-## Step 9 — Transaction handling
+A execução do chunk pode ser envolvida em transação conforme o modo transacional configurado.
 
-Chunk execution may be wrapped in a transaction depending on the configured transaction mode.
+Conceitualmente, isso significa que o motor pode:
 
-Conceptually, this means the engine can:
+- processar sem transação explícita
+- processar um chunk inteiro sob uma mesma transação
 
-- process records without transaction wrapping
-- process a full chunk under a single transaction strategy
+Esse controle é aplicado de forma consistente ao redor do chunk para manter o comportamento explícito e previsível.
 
-Transaction handling is applied consistently around chunk execution so the behavior remains explicit and predictable.
+Isso é especialmente importante em jobs que alteram estado no banco.
 
-This is especially important for jobs that update database state.
+## Etapa 10 — Liberação de referências e conclusão do chunk
 
-## Step 10 — Reference release and chunk completion
+Depois que um chunk é processado, o motor executa tarefas de housekeeping.
 
-After a chunk is processed, the engine performs post-chunk housekeeping.
+Normalmente isso inclui:
 
-This usually includes:
+- liberar referências ligadas ao chunk recém-processado
+- notificar listeners de conclusão
+- atualizar observação interna de progresso
+- registrar progresso em log quando habilitado
 
-- releasing references associated with the just-processed chunk
-- notifying chunk completion listeners
-- updating internal progress observation
-- logging progress when enabled
+Esse passo ajuda a manter execuções longas estáveis ao longo do tempo.
 
-This step helps keep long-running jobs stable over time.
+## Etapa 11 — Chunk final e fim da entrada
 
-## Step 11 — Final chunk and end-of-input behavior
+Quando a iteração chega ao fim do stream:
 
-When the iteration reaches the end of the result stream:
+- qualquer registro restante no buffer é processado como chunk final parcial
+- se nenhum registro tiver sido lido, a execução ainda assim termina corretamente
+- os contadores finais são consolidados em um único resultado
 
-- any remaining buffered records are processed as the final partial chunk
-- if no records were read, the engine still completes cleanly
-- final counters are consolidated into a single execution result
+Isso garante comportamento correto para:
 
-This ensures that the engine behaves correctly for:
+- datasets completos
+- último chunk parcial
+- resultados vazios
 
-- full datasets
-- partial final chunks
-- empty result sets
+## Etapa 12 — Resultado final
 
-## Step 12 — Final result
+Ao final da execução, o motor retorna um objeto com o resumo do processamento.
 
-At the end of execution, the engine returns a final result object summarizing the run.
+Esse resultado normalmente inclui:
 
-Typical result information includes:
+- total de registros processados
+- total de erros
+- total de retries
+- instante de início
+- instante de fim
+- duração total
 
-- total processed records
-- total errors
-- total retries
-- execution start time
-- execution end time
-- total duration
+Esse resultado pode ser usado para:
 
-This result can be used by the caller for:
+- logging operacional
+- monitoramento
+- alertas
+- relatórios
+- orquestração de jobs
 
-- operational logging
-- monitoring
-- alerting
-- reporting
-- job orchestration
+## Resumo do fluxo
 
-## Flow summary
+O fluxo completo pode ser resumido assim:
 
-The complete runtime flow can be summarized as:
+Configurar processor
+↓
+Chamar `run()`
+↓
+Validar configuração
+↓
+Preparar query
+↓
+Ler registros em streaming
+↓
+Acumular chunk
+↓
+Processar cada registro
+↓
+Aplicar retry e tratamento de erro
+↓
+Finalizar chunk
+↓
+Repetir até o fim da entrada
+↓
+Retornar `ProcessingResult`
 
-Configure processor 
-↓ 
-Call run() 
-↓ 
-Validate configuration 
-↓ 
-Prepare query 
-↓ 
-Read records as a stream 
-↓ 
-Accumulate chunk 
-↓ 
-Process each record 
-↓ 
-Apply retry and error handling 
-↓ 
-Finalize chunk 
-↓ 
-Repeat until input ends 
-↓ 
-Return final ProcessingResult
+## Características operacionais
 
+Esse fluxo possui algumas propriedades importantes:
 
-## Operational characteristics
+- a execução é sequencial
+- o uso de memória permanece limitado pelo streaming e pelo buffer de chunk
+- o tamanho do chunk influencia fortemente throughput e custo transacional
+- políticas de retry e erro afetam diretamente a resiliência
+- logs de progresso podem ser habilitados para jobs longos
 
-This flow has a few important runtime properties:
+## Documentação relacionada
 
-- execution is sequential
-- memory usage remains bounded by streaming and chunk buffering
-- chunk size strongly affects throughput and transaction cost
-- retry and error policies directly affect resilience behavior
-- progress logging can be enabled for long-running workloads
+Para mais contexto, veja:
 
-## Related documentation
-
-For more context, see:
-
-- [Architecture overview](architecture-overview.md)
-- [Package organization](package-organization.md)
+- [Visão geral da arquitetura](architecture-overview.md)
+- [Organização dos pacotes](package-organization.md)

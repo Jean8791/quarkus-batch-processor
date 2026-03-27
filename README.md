@@ -1,132 +1,135 @@
 # Quarkus Batch Processor
 
-High-performance batch processing engine for Quarkus applications, designed to be embedded into other projects that already own their datasource, transaction, and runtime configuration.
+Motor de processamento batch para aplicações Quarkus, pensado para ser incorporado em outros projetos que já possuem datasource, transação e configuração de runtime definidos.
 
-This project provides a fluent API for building batch workloads using streaming database reads, chunk-based processing, retry strategies, and configurable error handling.
+O objetivo do projeto é oferecer uma API fluente para processamento de grandes volumes de registros com leitura em streaming, execução em chunks, retry configurável e tratamento de erro controlado.
 
-It is a library module, not a standalone application:
+Este módulo é uma biblioteca, não uma aplicação standalone:
 
-- no datasource configuration is bundled here
-- no HTTP endpoints are exposed here
-- no request/response layer is part of this project
-- the consuming application provides `EntityManager`, transactions, and infrastructure settings
+- não define datasource próprio
+- não expõe endpoints HTTP
+- não contém camada de requisição/resposta
+- depende do projeto consumidor para fornecer `EntityManager`, transações e configuração de infraestrutura
 
-## Why this project exists
+## Por que este projeto existe
 
-Processing large volumes of data with traditional ORM patterns often leads to problems such as:
+Processar grandes volumes com padrões ORM tradicionais costuma gerar problemas como:
 
-- excessive memory consumption
-- persistence context growth
-- long-running transactions
-- unstable throughput on large tables
+- consumo excessivo de memória
+- crescimento do contexto de persistência
+- transações longas
+- throughput instável em tabelas grandes
 
-Quarkus Batch Processor addresses these issues with a streaming-oriented execution model built for batch workloads.
+O `quarkus-batch-processor` foi criado para reduzir esses problemas com um modelo de execução orientado a streaming e chunks.
 
-## Main features
+## Principais recursos
 
-- Low memory footprint through streaming reads
-- Chunk-based processing
-- Configurable transaction boundaries
-- Retry strategies for transient failures
-- Record-level error handling
-- Execution metrics and progress logging
-- Fluent API for defining processing pipelines
-- Designed for large-scale relational data processing
+- baixo uso de memória por leitura progressiva
+- processamento em chunks
+- fronteiras transacionais configuráveis
+- políticas de retry para falhas transitórias
+- tratamento de erro por registro
+- métricas e logs de progresso
+- API fluente para definição do processamento
+- foco em processamento relacional de grande volume
 
-## When to use it
+## Quando usar
 
-This library is a good fit for workloads such as:
+Este projeto faz sentido para cenários como:
 
-- processing millions of database records
-- data migration jobs
-- ETL pipelines
-- batch updates
-- reprocessing tasks
-- scheduled background jobs
+- processamento de milhões de registros
+- migração de dados
+- pipelines de ETL
+- atualizações em lote
+- reprocessamento de dados
+- jobs agendados em background
 
-## When not to use it
+## Quando não usar
 
-This project is not intended for:
+Este projeto não foi desenhado para:
 
-- small datasets
-- real-time APIs
-- request-driven business flows
-- short transactional application logic
+- datasets pequenos
+- APIs em tempo real
+- fluxos de negócio orientados a request
+- lógicas transacionais curtas
 
-It is optimized specifically for batch execution scenarios.
+Ele é otimizado para execução batch.
 
-## High-level architecture
+## Arquitetura em alto nível
 
-The engine follows a streaming pipeline:
+O fluxo principal do motor é:
 
-Database 
-↓ 
-Scrollable results 
-↓ 
-Iterator 
-↓ 
-Processing loop 
-↓ 
-Chunk formation 
-↓ 
-Transaction execution 
-↓ 
-Metrics logging
+Banco de dados
+↓
+`ScrollableResults`
+↓
+Iterador
+↓
+Loop de processamento
+↓
+Formação de chunk
+↓
+Execução transacional
+↓
+Métricas e logs
 
+Essa arquitetura evita carregar o resultado inteiro em memória.
 
-This architecture prevents large result sets from being loaded fully into memory.
+## Modelo de processamento
 
-## Processing model
+Os registros são lidos sequencialmente e agrupados em chunks antes da execução.
 
-The processing flow is based on reading records sequentially and grouping them into chunks for execution.
+Fluxo típico:
 
-Typical flow:
+Ler registros
+↓
+Montar chunk
+↓
+Executar processamento
+↓
+Commit ou rollback conforme a estratégia
+↓
+Registrar métricas
 
-Fetch records 
-↓ 
-Build chunk 
-↓ 
-Execute processing 
-↓ 
-Commit or rollback according to transaction strategy 
-↓ 
-Log metrics
+O tamanho do chunk impacta diretamente o equilíbrio entre throughput, custo transacional e pressão no banco.
 
+## Componentes principais
 
-Chunk size directly affects the balance between throughput, transaction cost, and database pressure.
+### `FastRecordProcessor`
 
-## Core components
+Ponto de entrada principal para configuração de jobs batch.
 
-### FastRecordProcessor
-Main entry point for configuring batch jobs.
+### `FastRecordProcessorImpl`
 
-### FastRecordProcessorImpl
-Internal engine implementation responsible for coordinating execution.
+Implementação interna responsável por coordenar a execução.
 
-### ProcessingLoop
-Execution loop that iterates over streamed records and builds chunks.
+### `ProcessingLoop`
 
-### ProcessingMetricsLogger
-Responsible for logging execution metrics and progress information.
+Loop central que percorre os registros e forma os chunks.
 
-### ChunkExecutionResult
-Represents the result of an individual processed chunk.
+### `ProcessingMetricsLogger`
 
-### ProcessingResult
-Final execution summary returned after processing completes.
+Responsável pelos logs de métricas e progresso.
 
-## Package structure
+### `ChunkExecutionResult`
 
-The codebase is organized into the following packages:
+Representa o resultado de um chunk processado.
 
-- `config` — configuration objects such as retry, error, and transaction settings
-- `contract` — public contracts and callback interfaces
-- `engine` — core execution engine and processing pipeline
-- `result` — result objects returned after execution
+### `ProcessingResult`
 
-## Example usage
+Resumo final retornado ao término da execução.
 
-Example of configuring a batch job:
+## Estrutura de pacotes
+
+O código está organizado nos seguintes pacotes principais:
+
+- `config` — configurações de retry, erro e transação
+- `contract` — contratos públicos e pontos de extensão
+- `engine` — implementação interna do motor
+- `result` — objetos de resultado retornados ao consumidor
+- `report` — geração de relatórios em formatos como CSV e XLSX
+
+## Exemplo de uso
 
 ```java
 import br.com.codenest.config.ErrorStrategy;
@@ -148,76 +151,72 @@ class CustomerJob {
                 .transactionMode(TransactionMode.CHUNK)
                 .onError(ErrorStrategy.CONTINUE_ON_ERROR)
                 .onProcess(this::recalculateScore)
-                .onRecordError((customer, error) -> log.error("Error processing record", error))
+                .onRecordError((customer, error) -> log.error("Erro ao processar registro", error))
                 .run();
     }
 }
 ```
 
+O motor lê os dados em streaming, processa em chunks e devolve um resumo final da execução.
 
-The engine streams the records, processes them in chunks, and returns a final execution summary.
+## Segurança de memória
 
-> Important:
-> Keep this example aligned with the actual public API of the project. If method names or enum values change, update this section first.
+O projeto foi desenhado para evitar carregamento completo de grandes datasets em memória.
 
-## Memory safety
+Na prática, isso busca garantir:
 
-The engine is designed to avoid loading large datasets into memory all at once.
+- uso de memória mais estável
+- comportamento previsível em execuções longas
+- operação mais segura sobre tabelas muito grandes
 
-It relies on streaming access patterns and controlled processing cycles to provide:
+## Métricas
 
-- stable memory usage
-- predictable execution behavior
-- safer handling of very large tables
+Durante a execução, o motor pode registrar métricas como:
 
-## Metrics
+- total de registros processados
+- total de erros
+- total de retries
+- tempo total de execução
+- progresso por chunk
 
-During execution, the engine can log metrics such as:
+Essas informações ajudam no monitoramento operacional de jobs longos.
 
-- total processed records
-- total errors
-- retry count
-- total execution time
-- chunk progress
-
-These metrics help monitor throughput and operational behavior during long-running jobs.
-
-## Requirements
+## Requisitos
 
 - Java 17+
 - Quarkus 3+
 - Hibernate ORM
 
-## Integration Model
+## Modelo de integração
 
-This module assumes the host project already defines:
+Este módulo assume que o projeto hospedeiro já define:
 
-- Quarkus datasource configuration
-- transaction manager / `UserTransaction`
-- JPA entities and mappings
-- any scheduling, triggering, or HTTP exposure around batch execution
+- configuração de datasource do Quarkus
+- gerenciador transacional / `UserTransaction`
+- entidades e mapeamentos JPA
+- qualquer agendamento, orquestração ou exposição HTTP em torno do batch
 
-The processor itself only focuses on efficient record iteration and chunk execution.
+O foco desta biblioteca é exclusivamente melhorar a execução do processamento.
 
-## Documentation
+## Documentação adicional
 
-Additional documentation is available in the [`docs`](docs) directory:
+Mais detalhes estão disponíveis no diretório [`docs`](docs):
 
-- [Architecture overview](docs/architecture-overview.md)
-- [Package organization](docs/package-organization.md)
-- [Processing flow](docs/processing-flow.md)
+- [Visão geral da arquitetura](docs/architecture-overview.md)
+- [Organização dos pacotes](docs/package-organization.md)
+- [Fluxo de processamento](docs/processing-flow.md)
 
 ## Roadmap
 
-Potential future improvements include:
+Possíveis evoluções futuras:
 
-- parallel chunk execution
-- reactive database support
-- Kafka-based input sources
-- observability integration
-- backpressure support
-- more advanced retry policies
+- execução paralela de chunks
+- suporte reativo a banco
+- entrada baseada em Kafka
+- integração com observabilidade
+- suporte a backpressure
+- políticas de retry mais avançadas
 
-## License
+## Licença
 
 MIT License
