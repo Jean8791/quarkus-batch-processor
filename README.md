@@ -1,8 +1,15 @@
 # Quarkus Batch Processor
 
-High-performance batch processing engine for Quarkus, designed to process large datasets with predictable memory usage and controlled transaction boundaries.
+High-performance batch processing engine for Quarkus applications, designed to be embedded into other projects that already own their datasource, transaction, and runtime configuration.
 
 This project provides a fluent API for building batch workloads using streaming database reads, chunk-based processing, retry strategies, and configurable error handling.
+
+It is a library module, not a standalone application:
+
+- no datasource configuration is bundled here
+- no HTTP endpoints are exposed here
+- no request/response layer is part of this project
+- the consuming application provides `EntityManager`, transactions, and infrastructure settings
 
 ## Why this project exists
 
@@ -181,13 +188,16 @@ These metrics help monitor throughput and operational behavior during long-runni
 - Quarkus 3+
 - Hibernate ORM
 
-## Configuration
+## Integration Model
 
-The datasource is resolved from environment variables by default:
+This module assumes the host project already defines:
 
-- `QUARKUS_DATASOURCE_JDBC_URL`
-- `QUARKUS_DATASOURCE_USERNAME`
-- `QUARKUS_DATASOURCE_PASSWORD`
+- Quarkus datasource configuration
+- transaction manager / `UserTransaction`
+- JPA entities and mappings
+- any scheduling, triggering, or HTTP exposure around batch execution
+
+The processor itself only focuses on efficient record iteration and chunk execution.
 
 ## Documentation
 
