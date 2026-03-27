@@ -1,225 +1,227 @@
-# Package Organization
+# Organização dos Pacotes
 
-This document explains how the project is organized at the package level and what responsibility belongs to each part of the codebase.
+Este documento explica como o projeto está organizado em nível de pacote e qual responsabilidade pertence a cada parte do código.
 
-The goal of this structure is to keep the public API small, isolate the execution internals, and make the project easier to evolve over time.
+O objetivo dessa estrutura é manter a API pública enxuta, isolar a implementação interna e facilitar a evolução do projeto ao longo do tempo.
 
-## Overview
+## Visão geral
 
-The codebase is organized into a few main package groups:
+O código está organizado em alguns grupos principais:
 
 - `config`
 - `contract`
 - `engine`
 - `result`
-- `example`
+- `report`
 
-Each package has a clear role in the architecture.
+Cada pacote tem um papel claro dentro da arquitetura.
 
 ## `config`
 
-This package contains configuration types that define how processing behaves.
+Este pacote contém tipos de configuração que definem como o processamento se comporta.
 
-Typical responsibilities in this package include:
+Responsabilidades típicas:
 
-- transaction behavior configuration
-- error handling strategy configuration
-- retry policy definition
+- configuração de comportamento transacional
+- definição de estratégia de erro
+- definição de política de retry
 
-Examples of concepts that belong here:
+Exemplos de conceitos que pertencem aqui:
 
-- transaction mode
-- error strategy
-- retry strategy
+- modo transacional
+- estratégia de erro
+- estratégia de retry
 
-### What should go here
+### O que deve ficar aqui
 
-Types that describe execution options and processing policies.
+Tipos que descrevem opções de execução e políticas de processamento.
 
-### What should not go here
+### O que não deve ficar aqui
 
-- execution logic
-- database access code
-- orchestration code
-- result objects
+- lógica de execução
+- acesso a banco
+- orquestração
+- objetos de resultado
 
 ## `contract`
 
-This package contains the public contracts used by consumers of the library and by the internal engine to interact through stable abstractions.
+Este pacote contém os contratos públicos usados pelos consumidores da biblioteca e pela engine por meio de abstrações estáveis.
 
-Typical responsibilities in this package include:
+Responsabilidades típicas:
 
-- processing interfaces
-- callback contracts
-- extension points
-- mapping contracts for custom result handling
+- interfaces de processamento
+- contratos de callback
+- pontos de extensão
+- contratos de mapeamento de resultado
 
-Examples of concepts that belong here:
+Exemplos:
 
-- processor contract
-- chunk listener
-- record-level error handler
-- row mapper
-- transaction abstraction
+- contrato do processor
+- listener de chunk
+- handler de erro por registro
+- `rowMapper`
+- abstração de transação
 
-### What should go here
+### O que deve ficar aqui
 
-Interfaces and callback types that define how external code interacts with the engine.
+Interfaces e callbacks que definem como o código externo interage com a engine.
 
-### What should not go here
+### O que não deve ficar aqui
 
-- concrete engine implementations
-- internal orchestration logic
-- runtime metrics aggregation
-- package-private processing details
+- implementações concretas da engine
+- lógica interna de orquestração
+- agregação interna de métricas
+- detalhes package-private de processamento
 
 ## `engine`
 
-This package contains the internal implementation of the batch processing engine.
+Este pacote contém a implementação interna do motor batch.
 
-It is the core of the project and is responsible for coordinating execution.
+Ele é o núcleo do projeto e coordena a execução.
 
-Typical responsibilities in this package include:
+Responsabilidades típicas:
 
-- processor implementation
-- streaming iteration
-- chunk formation and execution
-- transaction coordination
-- internal error propagation
-- execution progress logging
+- implementação do processor
+- iteração em streaming
+- formação e execução de chunks
+- coordenação transacional
+- propagação interna de erros
+- logging de progresso
 
-Examples of concepts that belong here:
+Exemplos:
 
-- processing entry point implementation
-- processing loop
-- metrics logger
-- chunk execution result
-- engine-specific exception types
+- implementação do ponto de entrada
+- loop de processamento
+- logger de métricas
+- resultado de execução de chunk
+- exceções específicas da engine
 
-### What should go here
+### O que deve ficar aqui
 
-Concrete classes that implement the processing workflow and execution mechanics.
+Classes concretas que implementam o workflow e a mecânica da execução.
 
-### What should not go here
+### O que não deve ficar aqui
 
-- user-facing documentation examples
-- generic configuration enums
-- external-facing API-only contracts
-- final result DTOs meant for consumers
+- exemplos de documentação
+- enums genéricos de configuração pública
+- contratos exclusivamente públicos
+- DTOs finais voltados ao consumidor
 
 ## `result`
 
-This package contains the objects returned after processing finishes.
+Este pacote contém os objetos retornados ao final do processamento.
 
-Its role is to expose stable output structures to callers without leaking internal engine details.
+Seu papel é expor estruturas de saída estáveis sem vazar detalhes internos da engine.
 
-Typical responsibilities in this package include:
+Responsabilidades típicas:
 
-- final execution summaries
-- aggregate counters
-- execution timing information
+- resumo final da execução
+- contadores agregados
+- informações de tempo de execução
 
-### What should go here
+### O que deve ficar aqui
 
-Result objects intended to be consumed by application code after job execution completes.
+Objetos de resultado consumidos pelo código da aplicação após o job terminar.
 
-### What should not go here
+### O que não deve ficar aqui
 
-- intermediate engine state
-- processing loop internals
-- transaction implementation details
-- logging infrastructure
+- estado intermediário da engine
+- detalhes do loop de processamento
+- implementação transacional
+- infraestrutura de logging
 
-## `example`
+## `report`
 
-This package contains demonstration code intended to show how the library can be used.
+Este pacote contém a infraestrutura de geração de relatórios apoiada pela biblioteca.
 
-Its purpose is educational rather than architectural.
+Seu objetivo é permitir a produção de arquivos como CSV e XLSX sem misturar essa lógica ao núcleo do processamento batch.
 
-Typical responsibilities in this package include:
+Responsabilidades típicas:
 
-- sample entities
-- sample jobs
-- usage demonstrations
+- contratos de escrita de relatório
+- formatos suportados
+- definição de colunas e layout
+- geração de arquivos
+- integração do processor com exportação
 
-### What should go here
+### O que deve ficar aqui
 
-Minimal examples that help developers understand how to integrate the processor.
+Tipos relacionados à geração, escrita e saída de relatórios.
 
-### What should not go here
+### O que não deve ficar aqui
 
-- production engine logic
-- reusable framework internals
-- core configuration types
+- lógica central da engine batch
+- configuração transacional do processor
+- DTOs gerais de resultado do motor
 
-## Public API vs internal implementation
+## API pública versus implementação interna
 
-A useful way to think about the package structure is:
+Uma forma útil de pensar a estrutura é esta:
 
-### Public-facing packages
+### Pacotes voltados ao consumidor
 
-These are the packages most relevant to users of the library:
+Os pacotes mais relevantes para quem usa a biblioteca são:
 
 - `config`
 - `contract`
 - `result`
+- `report`
 
-These packages define how callers configure and consume the processor.
+Eles definem como o consumidor configura, executa e consome o processamento.
 
-### Internal implementation package
+### Pacote de implementação interna
 
-This package contains the processing internals:
+O pacote que contém os detalhes internos é:
 
 - `engine`
 
-This separation helps reduce accidental coupling between library consumers and implementation details.
+Essa separação reduz acoplamento acidental entre o consumidor e a implementação.
 
-## Dependency direction
+## Direção das dependências
 
-The intended dependency flow is conceptually:
+O fluxo conceitual de dependência é:
 
-Application code 
-↓ 
-contract / config 
-↓ 
-engine 
-↓ 
-result
+Código da aplicação
+↓
+`contract` / `config`
+↓
+`engine`
+↓
+`result`
 
+Na prática:
 
-More practically:
+- a aplicação configura o processamento por meio dos contratos públicos
+- a engine executa o workflow
+- o resultado final é devolvido como objeto estável
 
-- application code configures processing through public contracts
-- the engine executes the workflow
-- the final result is returned as a stable output object
+O código externo deve evitar depender diretamente dos detalhes internos da `engine`, exceto quando isso fizer parte explícita do desenho da biblioteca.
 
-The internal engine should depend on public contracts where appropriate, but external code should avoid depending directly on internal engine details unless explicitly intended by the project design.
+## Benefícios dessa organização
 
-## Design benefits of this structure
+Essa estrutura traz algumas vantagens:
 
-This package organization provides several advantages:
+- separação mais clara de responsabilidades
+- onboarding mais simples para novos contribuidores
+- evolução mais segura da implementação interna
+- menor acoplamento entre API e engine
+- melhor manutenção à medida que o projeto cresce
 
-- clearer separation of responsibilities
-- easier onboarding for contributors
-- safer evolution of implementation internals
-- reduced coupling between API and engine code
-- better maintainability as the project grows
+## Diretrizes de manutenção
 
-## Maintenance guidelines
+Ao adicionar código novo, siga estas regras:
 
-When adding new code, use the following rules:
+- coloque políticas e comportamentos em `config`
+- coloque abstrações públicas e pontos de extensão em `contract`
+- coloque processamento interno e orquestração em `engine`
+- coloque saídas finais consumidas externamente em `result`
+- coloque geração de relatório em `report`
 
-- put policy and behavior definitions in `config`
-- put public abstractions and extension points in `contract`
-- put processing internals and orchestration in `engine`
-- put final externally consumed outputs in `result`
-- put demonstration code in `example`
+Se uma classe estiver fazendo mais de um desses papéis, ela provavelmente precisa ser dividida.
 
-If a class does more than one of these things, it may need to be split.
+## Documentação relacionada
 
-## Related documentation
+Para mais contexto, veja:
 
-For more context, see:
-
-- [Architecture overview](architecture-overview.md)
-- [Processing flow](processing-flow.md)
+- [Visão geral da arquitetura](architecture-overview.md)
+- [Fluxo de processamento](processing-flow.md)

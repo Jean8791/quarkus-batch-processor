@@ -1,220 +1,220 @@
-# Architecture Overview
+# Visão Geral da Arquitetura
 
-`quarkus-batch-processor` is a batch processing engine designed for large-scale relational data workloads in Quarkus applications.
+O `quarkus-batch-processor` é um motor de processamento batch para workloads relacionais de grande volume em aplicações Quarkus.
 
-Its architecture is focused on predictable memory usage, explicit processing flow, and controlled transaction boundaries.
+A arquitetura foi pensada para priorizar uso previsível de memória, fluxo de processamento explícito e fronteiras transacionais controladas.
 
-## Architectural goals
+## Objetivos da arquitetura
 
-The engine was designed around the following goals:
+O motor foi desenhado para:
 
-- process very large datasets safely
-- avoid loading full result sets into memory
-- keep transaction scope explicit and predictable
-- support resilient record processing with configurable error handling
-- provide a simple API while keeping execution internals isolated
+- processar datasets muito grandes com segurança
+- evitar carregamento completo do resultado em memória
+- manter o escopo transacional explícito e previsível
+- suportar resiliência com retry e tratamento configurável de erro
+- oferecer uma API simples, mantendo os detalhes internos isolados
 
-## Core architectural idea
+## Ideia central
 
-Instead of materializing an entire query result in memory, the engine processes records as a stream.
+Em vez de materializar toda a query em memória, o motor consome os registros como stream.
 
-At a high level, the engine:
+Em alto nível, ele:
 
-1. executes a query against the database
-2. reads the result progressively
-3. groups records into chunks
-4. processes each chunk according to the configured strategy
-5. emits execution metrics and a final result summary
+1. executa uma query no banco
+2. lê o resultado progressivamente
+3. agrupa os registros em chunks
+4. processa cada chunk conforme a estratégia configurada
+5. gera métricas e um resumo final da execução
 
-This model is appropriate for long-running workloads where throughput and memory stability are more important than request/response latency.
+Esse modelo é adequado para jobs longos, nos quais estabilidade de memória e throughput importam mais do que latência de request/respose.
 
-## High-level processing pipeline
+## Pipeline principal
 
-Database 
-↓ 
-Streaming query results 
-↓ 
-Iterator abstraction 
-↓ 
-ProcessingLoop 
-↓ 
-Chunk formation 
-↓ 
-Chunk execution 
-↓ 
-Metrics and final result
+Banco de dados
+↓
+Resultado em streaming
+↓
+Abstração de iterador
+↓
+`ProcessingLoop`
+↓
+Formação de chunks
+↓
+Execução do chunk
+↓
+Métricas e resultado final
 
+Cada etapa possui responsabilidade reduzida, o que ajuda na manutenção e evolução do código.
 
-Each stage has a narrow responsibility, which helps keep the implementation easier to reason about and evolve.
+## Componentes principais
 
-## Main architectural components
+### `FastRecordProcessor`
 
-### FastRecordProcessor
+Ponto de entrada público da biblioteca.
 
-The main entry point for consumers of the library.
+Sua função é expor a API fluente usada para configurar o processamento.
 
-Its responsibility is to expose the fluent API used to configure a batch job.
+### `FastRecordProcessorImpl`
 
-### FastRecordProcessorImpl
+Coordenador interno da execução batch.
 
-The internal coordinator of batch execution.
+Ele é responsável por:
 
-It is responsible for:
+- validar a configuração
+- criar o iterador de resultados
+- selecionar a estratégia de execução
+- coordenar o processamento dos chunks
+- produzir o resultado final
 
-- validating processing configuration
-- creating the result iterator
-- selecting the execution strategy
-- coordinating chunk processing
-- producing the final processing result
+### `ProcessingLoop`
 
-### ProcessingLoop
+Loop central do motor.
 
-The core loop of the engine.
+Ele é responsável por:
 
-It is responsible for:
+- iterar sobre os registros em streaming
+- agrupar registros em chunks
+- invocar o processador de chunk
+- acionar notificações de conclusão
+- liberar referências entre execuções
 
-- iterating over streamed records
-- grouping records into chunks
-- invoking the chunk processor
-- triggering chunk completion notifications
-- releasing references between chunk executions
+### `ProcessingMetricsLogger`
 
-### ProcessingMetricsLogger
+Encapsula o logging da execução.
 
-Encapsulates execution logging.
+Ele registra:
 
-It is responsible for logging:
+- início da execução
+- progresso por chunk
+- resumo final
+- falhas de processamento
 
-- start of execution
-- chunk progress
-- completion summary
-- failure information
+### `ChunkExecutionResult`
 
-### ChunkExecutionResult
+Representa o resultado de um chunk individual, incluindo contadores como processados, erros e retries.
 
-Represents the outcome of a single processed chunk, including counters such as processed items, errors, and retries.
+### `ProcessingResult`
 
-### ProcessingResult
+Representa o resumo final da execução batch.
 
-Represents the final summary of the batch execution.
+É o principal objeto retornado ao chamador no fim do processamento.
 
-It is the main result object returned to the caller after the job finishes.
+## Organização em pacotes
 
-## Package-level organization
+A arquitetura está dividida em áreas principais:
 
-The architecture is divided into a few main areas:
+- `config` — tipos de configuração que definem o comportamento
+- `contract` — contratos públicos e pontos de extensão
+- `engine` — lógica interna e orquestração da execução
+- `result` — objetos de resultado retornados ao consumidor
+- `report` — abstrações e implementações de geração de relatório
 
-- `config` — configuration types that define execution behavior
-- `contract` — public contracts and extension points used by consumers
-- `engine` — internal orchestration and processing logic
-- `result` — execution result objects returned by the engine
+Essa separação mantém a API pública menor e isola os detalhes internos do motor.
 
-This separation helps keep the public API small while isolating execution mechanics inside the engine layer.
+## Estratégia de acesso a dados
 
-## Data access strategy
+Uma decisão central da arquitetura é o consumo em estilo streaming.
 
-A central architectural decision is the use of streaming-style result consumption.
+O objetivo é evitar:
 
-The goal is to avoid:
+- carregar todo o resultado em memória
+- acumular estado ORM por muito tempo
+- aumentar excessivamente o contexto de persistência em jobs grandes
 
-- loading entire result sets into memory
-- long-lived ORM state accumulation
-- excessive persistence context growth during large jobs
+Isso torna o motor mais apropriado para cenários com centenas de milhares ou milhões de registros.
 
-This makes the engine more suitable for workloads involving hundreds of thousands or millions of rows.
+## Modelo de execução em chunks
 
-## Chunk-based execution model
+Os registros não são processados todos de uma vez. Eles são acumulados em chunks e executados em lote.
 
-Records are not processed all at once. They are accumulated into chunks and executed in batches.
-
-This design provides a practical balance between:
+Esse desenho busca um equilíbrio prático entre:
 
 - throughput
-- memory stability
-- transaction size
-- operational predictability
+- estabilidade de memória
+- tamanho da transação
+- previsibilidade operacional
 
-### Trade-offs of chunk size
+### Trade-offs do tamanho do chunk
 
-Chunk size is one of the most important tuning parameters in the architecture.
+O tamanho do chunk é um dos parâmetros mais importantes do motor.
 
-- Smaller chunks reduce rollback cost and transaction duration
-- Larger chunks may improve throughput
-- Very large chunks can increase transaction pressure and failure impact
+- chunks menores reduzem custo de rollback e duração da transação
+- chunks maiores podem aumentar throughput
+- chunks muito grandes elevam pressão transacional e impacto de falhas
 
-Because of this, chunk size should be chosen according to workload behavior and database characteristics.
+Por isso, o tamanho ideal deve ser ajustado conforme a carga e o comportamento do banco.
 
-## Error handling and resilience
+## Tratamento de erro e resiliência
 
-The engine is designed to support controlled failure handling during batch execution.
+O motor suporta tratamento controlado de falhas durante a execução batch.
 
-Depending on configuration, processing may:
+Dependendo da configuração, o processamento pode:
 
-- fail fast
-- continue after record-level failures
-- retry transient failures before giving up
+- falhar imediatamente
+- continuar após erro por registro
+- tentar novamente falhas transitórias antes de desistir
 
-This allows the same architecture to support both strict and tolerant batch scenarios.
+Isso permite atender desde jobs estritos até cenários mais tolerantes a falhas.
 
-## Transaction boundaries
+## Fronteiras transacionais
 
-Transaction control is part of the architecture rather than an incidental detail.
+O controle de transação é parte explícita da arquitetura.
 
-The execution model is designed so that transaction handling can be applied consistently to chunk processing, keeping behavior explicit and easier to observe.
+O modelo de execução permite aplicar transação de forma consistente em torno do chunk, deixando o comportamento mais observável e previsível.
 
-This is important for:
+Isso é importante principalmente para:
 
-- large updates
-- long-running jobs
-- workloads with partial failures
-- operational recovery strategies
+- atualizações em grande volume
+- jobs longos
+- workloads com falhas parciais
+- estratégias de recuperação operacional
 
-## Memory behavior
+## Comportamento de memória
 
-A primary concern of the architecture is stable memory usage over long execution windows.
+Uma preocupação central do projeto é manter o uso de memória estável em execuções prolongadas.
 
-The engine avoids the classic batch failure mode where memory usage grows continuously as more records are processed.
+O motor evita o padrão clássico de falha batch em que o consumo cresce continuamente à medida que mais registros são processados.
 
-The intended behavior is:
+O comportamento desejado é:
 
-- progressive reading
-- bounded in-memory accumulation
-- regular release of processing references between chunks
+- leitura progressiva
+- acúmulo limitado em memória
+- liberação recorrente de referências entre chunks
 
-## Extensibility points
+## Pontos de extensão
 
-The architecture includes extension points intended for customization, such as:
+A arquitetura inclui pontos de extensão para customização, como:
 
-- processing callbacks
-- record-level error handlers
-- chunk listeners
-- retry behavior
-- query parameterization
-- row mapping for native query scenarios
+- callbacks de processamento
+- handlers de erro por registro
+- listeners de chunk
+- política de retry
+- parametrização de query
+- `rowMapper` para queries nativas
 
-These extension points allow customization without requiring changes to the execution core.
+Esses pontos permitem customização sem alterar o núcleo do motor.
 
-## What this architecture is optimized for
+## Para que esta arquitetura foi otimizada
 
-This design is optimized for:
+Este desenho é otimizado para:
 
-- large database-driven batch jobs
-- migration and reprocessing workloads
-- offline processing pipelines
-- scheduled background execution
+- jobs batch baseados em banco de dados
+- migração e reprocessamento
+- pipelines offline
+- execução agendada em background
 
-## What this architecture is not optimized for
+## Para que esta arquitetura não foi otimizada
 
-This design is not intended for:
+Este desenho não foi pensado para:
 
-- request/response application flows
-- low-latency transactional endpoints
-- small in-memory processing tasks
-- highly interactive workloads
+- fluxos request/response
+- endpoints transacionais de baixa latência
+- tarefas pequenas em memória
+- workloads altamente interativos
 
-## Related documentation
+## Documentação relacionada
 
-For more details, see:
+Para mais detalhes, veja:
 
-- [Package organization](package-organization.md)
-- [Processing flow](processing-flow.md)
+- [Organização dos pacotes](package-organization.md)
+- [Fluxo de processamento](processing-flow.md)
