@@ -21,7 +21,6 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -124,7 +123,7 @@ class ProcessorBackedReportServiceTest {
         }
 
         @Override
-        public Processor<T> params(Map<String, Object> params) {
+        public Processor<T> params(java.util.Map<String, Object> params) {
             return this;
         }
 
