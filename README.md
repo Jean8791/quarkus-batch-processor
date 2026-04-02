@@ -159,6 +159,75 @@ class CustomerJob {
 
 O motor lê os dados em streaming, processa em chunks e devolve um resumo final da execução.
 
+## Exemplo prático: query nativa para CSV em diretório local
+
+Se você quiser exportar uma query nativa para CSV sem adicionar novos métodos na API da biblioteca, pode usar `nativeQuery(...)` diretamente e gravar o arquivo no seu ambiente.
+
+```java
+import br.com.codenest.contract.RowMapper;
+import br.com.codenest.engine.FastRecordProcessor;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+
+import java.io.BufferedWriter;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Map;
+
+@ApplicationScoped
+class CustomerNativeCsvJob {
+
+    @Inject
+    FastRecordProcessor processor;
+
+    public Path exportActiveCustomers() throws Exception {
+        Path output = Path.of("/tmp/reports/clientes-ativos.csv");
+        Files.createDirectories(output.getParent());
+
+        try (BufferedWriter writer = Files.newBufferedWriter(output)) {
+            writer.write("ID,NOME,EMAIL");
+            writer.newLine();
+
+            RowMapper<CustomerCsvRow> nativeMapper = row -> new CustomerCsvRow(
+                    String.valueOf(row[0]),
+                    String.valueOf(row[1]),
+                    String.valueOf(row[2])
+            );
+
+            processor.source(CustomerCsvRow.class)
+                    .nativeQuery("""
+                        select
+                            c.id,
+                            c.name,
+                            c.email
+                        from customers c
+                        where c.status = :status
+                        order by c.id
+                    """)
+                    .params(Map.of("status", "ACTIVE"))
+                    .rowMapper(nativeMapper)
+                    .chunkSize(500)
+                    .onProcess(row -> {
+                        try {
+                            writer.write(row.id() + "," + row.name() + "," + row.email());
+                            writer.newLine();
+                        } catch (Exception e) {
+                            throw new RuntimeException("Erro ao escrever linha do CSV", e);
+                        }
+                    })
+                    .run();
+        }
+
+        return output;
+    }
+
+    private record CustomerCsvRow(String id, String name, String email) {
+    }
+}
+```
+
+Nesse exemplo, o arquivo será criado em `/tmp/reports/clientes-ativos.csv`.
+
 ## Segurança de memória
 
 O projeto foi desenhado para evitar carregamento completo de grandes datasets em memória.
