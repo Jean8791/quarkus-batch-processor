@@ -36,7 +36,7 @@ O `getResultList()` comum carrega o resultado inteiro na memória, e cada entida
 - dirty checking cada vez mais lento a cada entidade carregada;
 - uma única transação longa segurando locks e espaço de undo por minutos.
 
-Esta biblioteca mantém **um chunk por vez na memória**, limpa o contexto de persistência depois de cada chunk e, quando pedido, faz **uma transação por chunk**.
+Esta biblioteca mantém **um chunk por vez na memória**, limpa o contexto de persistência depois de cada chunk e, quando pedido, faz **uma transação por chunk**. No PostgreSQL, a garantia de um chunk por vez vale quando `run()` é chamado de dentro de uma transação; veja [Bom saber](#bom-saber) e o [Benchmark](#benchmark).
 
 ## Recursos
 
@@ -200,7 +200,7 @@ FastRecord finished | processor=InvoiceRecalc | entity=Invoice | processed=18234
 ## Bom saber
 
 - **Registros desanexados.** Entidades lidas por uma `StatelessSession` não são gerenciadas, e associações lazy não podem ser carregadas a partir delas. Use `join fetch` na consulta para as associações de que precisar, ou carregue o que for alterar pelo seu próprio `EntityManager` dentro do consumer.
-- **Cursores no PostgreSQL.** O driver JDBC do PostgreSQL só faz streaming com fetch size quando o autocommit está desligado. Fora de uma transação, o Quarkus entrega conexões com autocommit, e o driver pode trazer o resultado inteiro de uma vez. Para tabelas muito grandes no PostgreSQL, chame o `run()` com `TransactionMode.NONE` de dentro de uma transação.
+- **Cursores no PostgreSQL.** O driver JDBC do PostgreSQL só faz streaming com fetch size quando o autocommit está desligado. Fora de uma transação, o Quarkus entrega conexões com autocommit, e o driver traz o resultado inteiro de uma vez, e a memória cresce com a tabela (medido no [Benchmark](#benchmark)). Para tabelas grandes no PostgreSQL, chame o `run()` com `TransactionMode.NONE` de dentro de uma transação.
 - **Contexto de persistência.** O `EntityManager` da aplicação é limpo depois de cada chunk; não guarde entidades gerenciadas de um chunk para outro.
 - **Uma execução, uma thread.** Um `Processor` é configurado e executado uma vez, na thread que o chamou.
 

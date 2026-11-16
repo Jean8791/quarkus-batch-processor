@@ -36,7 +36,7 @@ The usual `getResultList()` loads the whole result into memory, and every entity
 - dirty checking getting slower with every entity loaded;
 - a single long transaction holding locks and undo space for minutes.
 
-This library keeps **one chunk in memory at a time**, clears the persistence context after each chunk and, when asked, commits **one transaction per chunk**.
+This library keeps **one chunk in memory at a time**, clears the persistence context after each chunk and, when asked, commits **one transaction per chunk**. On PostgreSQL, the one-chunk guarantee holds when `run()` is called from inside a transaction; see [Things to know](#things-to-know) and the [Benchmark](#benchmark).
 
 ## Features
 
@@ -200,7 +200,7 @@ FastRecord finished | processor=InvoiceRecalc | entity=Invoice | processed=18234
 ## Things to know
 
 - **Detached records.** Entities read by a `StatelessSession` are not managed, and lazy associations cannot be loaded from them. Use `join fetch` in the query for the associations you need, or load what you want to change through your own `EntityManager` inside the consumer.
-- **PostgreSQL cursors.** The PostgreSQL JDBC driver only streams rows with a fetch size when autocommit is off. Outside of a transaction, Quarkus hands out connections in autocommit mode, so the driver may fetch the whole result at once. For very large tables on PostgreSQL, call `run()` with `TransactionMode.NONE` from inside a transaction.
+- **PostgreSQL cursors.** The PostgreSQL JDBC driver only streams rows with a fetch size when autocommit is off. Outside of a transaction, Quarkus hands out connections in autocommit mode, so the driver fetches the whole result at once, and memory grows with the table (measured in the [Benchmark](#benchmark)). For large tables on PostgreSQL, call `run()` with `TransactionMode.NONE` from inside a transaction.
 - **Persistence context.** The application's `EntityManager` is cleared after every chunk, so do not keep managed entities across chunks.
 - **One run, one thread.** A `Processor` is configured and run once, on the calling thread.
 
