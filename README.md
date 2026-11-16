@@ -204,6 +204,84 @@ FastRecord finished | processor=InvoiceRecalc | entity=Invoice | processed=18234
 - **Persistence context.** The application's `EntityManager` is cleared after every chunk, so do not keep managed entities across chunks.
 - **One run, one thread.** A `Processor` is configured and run once, on the calling thread.
 
+## Benchmark
+
+Does the library really keep one chunk in memory? Short answer: **yes, but only when `run()` is called inside a transaction on PostgreSQL**. Without one, the PostgreSQL driver loads the whole result set, and memory grows with the table (see [Known limits](#known-limits)).
+
+### Methodology
+
+- Same table (`bench_row`, 5 columns, one of them a 96-character string), same HQL query and same per-row work for every variant. Real PostgreSQL in a container, no mocks.
+- **Read**: sum one numeric column. **XLSX export**: write 5 columns per row to a file.
+- Variants:
+  - *Naive*: `createQuery(...).getResultList()` in a transaction, then iterate. The XLSX variant writes an in-memory `XSSFWorkbook`.
+  - *Library (default)*: `FastRecordProcessor` with `TransactionMode.NONE`, called outside a transaction. The XLSX variant uses `ProcessorBackedReportService`.
+  - *Library inside a transaction*: the same call made from inside a transaction, as described in [Things to know](#things-to-know).
+  - `TransactionMode.CHUNK` was also measured for reads, see `benchmark/results/`.
+- Chunk size 1000. Each case runs in a **new JVM** with a fixed `-Xmx`. Inside it, a warm-up pass of 20,000 rows runs first, then a GC, then the measured pass.
+- 5 repetitions per case. **Repetition 1 is discarded**, and the table shows the **median of the other 4**.
+- **Time** covers the measured pass only (not Quarkus startup). **Memory** is the peak heap occupancy right after a garbage collection, which is what stayed alive. The heap in use before the pass was 11 to 19 MB.
+- Time of runs that ended in `OutOfMemoryError` is not reported: it measures the garbage collector struggling, not the work.
+
+### Environment
+
+| | |
+|---|---|
+| CPU | Intel Core i7-12650H, 16 logical cores |
+| RAM | 31 GB |
+| OS | Linux 7.0.0-43-generic |
+| JVM | OpenJDK 17.0.9, G1 (default), no other flags |
+| PostgreSQL | 16.15 (`postgres:16-alpine`, default settings, same host) |
+| Library | 0.1.0 |
+| `-Xmx` | 256m and 512m |
+
+Full details are in [`benchmark/results/environment.txt`](benchmark/results/environment.txt).
+
+### Results
+
+Each cell is median time / peak memory kept after GC. `OOM (4/4)` means `OutOfMemoryError` in all 4 counted runs.
+
+**Read**
+
+| Rows | `-Xmx` | Naive | Library (default) | Library inside a transaction |
+|---|---|---|---|---|
+| 100,000 | 256m | 327 ms / 107 MB | 239 ms / 43 MB | 280 ms / 12 MB |
+| 100,000 | 512m | 306 ms / 99 MB | 247 ms / 43 MB | 290 ms / 12 MB |
+| 1,000,000 | 256m | OOM (4/4) | OOM (4/4) | 1,976 ms / 12 MB |
+| 1,000,000 | 512m | OOM (4/4) | 1,608 ms / 329 MB | 1,993 ms / 12 MB |
+
+**XLSX export**
+
+| Rows | `-Xmx` | Naive | Library (default) | Library inside a transaction |
+|---|---|---|---|---|
+| 100,000 | 256m | OOM (4/4) | 1,470 ms / 50 MB | 1,535 ms / 20 MB |
+| 100,000 | 512m | OOM (3/4), 1 run without a result | 1,462 ms / 51 MB | 1,547 ms / 21 MB |
+| 1,000,000 | 256m | OOM (4/4) | OOM (4/4) | 14,891 ms / 20 MB |
+| 1,000,000 | 512m | OOM (4/4) | 13,360 ms / 333 MB | 14,880 ms / 20 MB |
+
+The CSV files behind these tables are in [`benchmark/results/`](benchmark/results/): `results.csv` (every run) and `summary.csv` (medians).
+
+### Known limits
+
+- **Default usage does not stream on PostgreSQL.** Called outside a transaction, the library kept 329 MB at 1 million rows (versus 43 MB at 100,000), so memory grows with the table, and it ran out of memory with 256m. `TransactionMode.CHUNK` behaves the same way (read results in `results.csv`). In a manual diagnostic run (one run, `-Xmx1g`, not part of the CSV), a heap histogram showed 1,000,000 live `org.postgresql.core.Tuple` objects, which matches the driver buffering the result. Call `run()` or the report service from inside a transaction to get the constant ~12 MB shown above.
+- **Streaming costs time.** Inside a transaction, 1 million rows took 1,993 ms against 1,608 ms without one (reading from a cursor in batches of 1000). The same happens in the XLSX export (14,880 ms against 13,360 ms).
+- **Small tables.** At 100,000 rows the library was not slower than the naive version in this setup. Sizes below 100,000 rows were not measured.
+- The naive XLSX export runs out of memory at 100,000 rows even with 512m. Part of that is Apache POI's in-memory workbook, not only the list of entities. The two were not measured separately.
+- One XLSX naive run (100,000 rows, 512m) ended without writing a result. It is counted as a failure, not as an OOM, because the cause was not confirmed.
+- Not measured: 5 million rows, heaps above 512m (so the exact size where the naive version fails is only known to be between 100,000 and 1,000,000 rows at 512m), other chunk sizes, other garbage collectors, other databases, and a hand-written cursor loop without the library.
+- Numbers come from one laptop with the database in a container on the same machine and other programs running. Use them for the order of magnitude, not as a guarantee.
+
+### How to reproduce
+
+Needs Docker, Java 17 and Python 3.
+
+```bash
+./benchmark/run.sh             # 100k and 1M rows, 256m and 512m, 5 repetitions (slow)
+./benchmark/run.sh --with-5m   # also 5M rows in the read scenario (slow)
+./benchmark/run.sh --quick     # smoke test, output not meant to be committed
+```
+
+The script installs the library into your local Maven repository, starts a throwaway PostgreSQL container with a random password kept in a temporary file, and writes `benchmark/results/results.csv`, `summary.csv` and `environment.txt`. The benchmark lives in its own Maven project and is not part of the published artifact.
+
 ## Requirements
 
 - Java 17+

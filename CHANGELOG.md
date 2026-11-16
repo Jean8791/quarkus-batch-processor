@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Reproducible benchmark in `benchmark/` (separate Maven project, not part of the published artifact): naive `getResultList()` versus the library, for reads and XLSX export, on real PostgreSQL. Run it with `./benchmark/run.sh`; results are in `benchmark/results/` and summarised in the README.
+
 ## [0.1.0] - 2026-11-06
 
 First public release.
