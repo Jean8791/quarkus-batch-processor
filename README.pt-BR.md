@@ -36,7 +36,7 @@ O `getResultList()` comum carrega o resultado inteiro na memória, e cada entida
 - dirty checking cada vez mais lento a cada entidade carregada;
 - uma única transação longa segurando locks e espaço de undo por minutos.
 
-Esta biblioteca mantém **um chunk por vez na memória**, limpa o contexto de persistência depois de cada chunk e, quando pedido, faz **uma transação por chunk**. No PostgreSQL, a garantia de um chunk por vez vale quando `run()` é chamado de dentro de uma transação; veja [Bom saber](#bom-saber) e o [Benchmark](#benchmark).
+Esta biblioteca mantém **um chunk por vez na memória**, limpa o contexto de persistência depois de cada chunk e, quando pedido, faz **uma transação por chunk**. No PostgreSQL a leitura passa por um cursor de verdade: a biblioteca desliga o autocommit na própria conexão de leitura enquanto roda; veja [Bom saber](#bom-saber) e o [Benchmark](#benchmark).
 
 ## Recursos
 
@@ -200,13 +200,13 @@ FastRecord finished | processor=InvoiceRecalc | entity=Invoice | processed=18234
 ## Bom saber
 
 - **Registros desanexados.** Entidades lidas por uma `StatelessSession` não são gerenciadas, e associações lazy não podem ser carregadas a partir delas. Use `join fetch` na consulta para as associações de que precisar, ou carregue o que for alterar pelo seu próprio `EntityManager` dentro do consumer.
-- **Cursores no PostgreSQL.** O driver JDBC do PostgreSQL só faz streaming com fetch size quando o autocommit está desligado. Fora de uma transação, o Quarkus entrega conexões com autocommit, e o driver traz o resultado inteiro de uma vez, e a memória cresce com a tabela (medido no [Benchmark](#benchmark)). Para tabelas grandes no PostgreSQL, chame o `run()` com `TransactionMode.NONE` de dentro de uma transação.
+- **Cursores no PostgreSQL.** O driver JDBC do PostgreSQL só faz streaming com fetch size quando o autocommit está desligado, e fora de uma transação o Quarkus entrega conexões em autocommit. Enquanto lê, a biblioteca desliga o autocommit na conexão do próprio cursor (e o restaura depois), então a memória fica constante sem você abrir uma transação. Se você chama `run()` de dentro da sua própria transação, essa conexão é deixada como está. A versão 0.1.0 não fazia isso e carregava o resultado inteiro fora de transação (veja o [Changelog](CHANGELOG.md)).
 - **Contexto de persistência.** O `EntityManager` da aplicação é limpo depois de cada chunk; não guarde entidades gerenciadas de um chunk para outro.
 - **Uma execução, uma thread.** Um `Processor` é configurado e executado uma vez, na thread que o chamou.
 
 ## Benchmark
 
-A biblioteca realmente mantém uma chunk por vez na memória? Resposta curta: **sim, mas só quando `run()` é chamado dentro de uma transação no PostgreSQL**. Sem ela, o driver do PostgreSQL carrega o resultado inteiro e a memória cresce com a tabela (veja [Limites conhecidos](#limites-conhecidos)).
+A biblioteca realmente mantém um chunk por vez na memória? Resposta curta: **sim**. Neste benchmark a memória ficou em cerca de 12 MB na leitura e cerca de 20 MB na exportação XLSX de 100.000 a 1.000.000 de linhas, enquanto a versão ingênua estourou a memória com 1 milhão de linhas. Estes números são de depois da correção descrita no [Changelog](CHANGELOG.md): a versão 0.1.0 carregava o resultado inteiro quando chamada fora de transação (329 MB com 1 milhão de linhas na execução anterior).
 
 ### Metodologia
 
@@ -215,7 +215,7 @@ A biblioteca realmente mantém uma chunk por vez na memória? Resposta curta: **
 - Variantes:
   - *Ingênuo*: `createQuery(...).getResultList()` em uma transação, depois itera. A variante XLSX escreve um `XSSFWorkbook` em memória.
   - *Biblioteca (padrão)*: `FastRecordProcessor` com `TransactionMode.NONE`, chamado fora de transação. A variante XLSX usa `ProcessorBackedReportService`.
-  - *Biblioteca dentro de transação*: a mesma chamada feita de dentro de uma transação, como descrito em [Bom saber](#bom-saber).
+  - *Biblioteca dentro de transação*: a mesma chamada feita de dentro de uma transação, mantida como controle.
   - O `TransactionMode.CHUNK` também foi medido na leitura; veja `benchmark/results/`.
 - Chunk de 1000. Cada caso roda em uma **JVM nova** com `-Xmx` fixo. Dentro dela, primeiro roda uma passada de aquecimento de 20.000 linhas, depois um GC, depois a passada medida.
 - 5 repetições por caso. **A repetição 1 é descartada**, e a tabela mostra a **mediana das outras 4**.
@@ -231,7 +231,7 @@ A biblioteca realmente mantém uma chunk por vez na memória? Resposta curta: **
 | SO | Linux 7.0.0-43-generic |
 | JVM | OpenJDK 17.0.9, G1 (padrão), sem outras flags |
 | PostgreSQL | 16.15 (`postgres:16-alpine`, configuração padrão, mesma máquina) |
-| Biblioteca | 0.1.0 |
+| Biblioteca | 0.1.0 mais a correção do cursor (commit `8f0d831`) |
 | `-Xmx` | 256m e 512m |
 
 Os detalhes completos estão em [`benchmark/results/environment.txt`](benchmark/results/environment.txt).
@@ -244,31 +244,31 @@ Cada célula é tempo mediano / pico de memória mantida após o GC. `OOM (4/4)`
 
 | Linhas | `-Xmx` | Ingênuo | Biblioteca (padrão) | Biblioteca dentro de transação |
 |---|---|---|---|---|
-| 100.000 | 256m | 327 ms / 107 MB | 239 ms / 43 MB | 280 ms / 12 MB |
-| 100.000 | 512m | 306 ms / 99 MB | 247 ms / 43 MB | 290 ms / 12 MB |
-| 1.000.000 | 256m | OOM (4/4) | OOM (4/4) | 1.976 ms / 12 MB |
-| 1.000.000 | 512m | OOM (4/4) | 1.608 ms / 329 MB | 1.993 ms / 12 MB |
+| 100.000 | 256m | 334 ms / 108 MB | 278 ms / 12 MB | 277 ms / 12 MB |
+| 100.000 | 512m | 329 ms / 97 MB | 323 ms / 12 MB | 289 ms / 12 MB |
+| 1.000.000 | 256m | OOM (4/4) | 1.965 ms / 12 MB | 2.033 ms / 12 MB |
+| 1.000.000 | 512m | OOM (4/4) | 2.058 ms / 12 MB | 1.956 ms / 12 MB |
 
 **Exportação XLSX**
 
 | Linhas | `-Xmx` | Ingênuo | Biblioteca (padrão) | Biblioteca dentro de transação |
 |---|---|---|---|---|
-| 100.000 | 256m | OOM (4/4) | 1.470 ms / 50 MB | 1.535 ms / 20 MB |
-| 100.000 | 512m | OOM (3/4), 1 execução sem resultado | 1.462 ms / 51 MB | 1.547 ms / 21 MB |
-| 1.000.000 | 256m | OOM (4/4) | OOM (4/4) | 14.891 ms / 20 MB |
-| 1.000.000 | 512m | OOM (4/4) | 13.360 ms / 333 MB | 14.880 ms / 20 MB |
+| 100.000 | 256m | OOM (4/4) | 1.546 ms / 20 MB | 1.544 ms / 20 MB |
+| 100.000 | 512m | OOM (3/4), 1 execução sem resultado | 1.632 ms / 21 MB | 1.540 ms / 20 MB |
+| 1.000.000 | 256m | OOM (4/4) | 14.693 ms / 20 MB | 15.531 ms / 20 MB |
+| 1.000.000 | 512m | OOM (4/4) | 15.073 ms / 21 MB | 14.558 ms / 20 MB |
 
 Os CSV por trás das tabelas estão em [`benchmark/results/`](benchmark/results/): `results.csv` (todas as execuções) e `summary.csv` (medianas).
 
 ### Limites conhecidos
 
-- **O uso padrão não faz streaming no PostgreSQL.** Chamada fora de transação, a biblioteca manteve 329 MB com 1 milhão de linhas (contra 43 MB com 100.000), ou seja, a memória cresce com a tabela, e ela estourou a memória com 256m. O `TransactionMode.CHUNK` se comporta do mesmo jeito (resultados da leitura no `results.csv`). Numa execução manual de diagnóstico (uma execução, `-Xmx1g`, fora do CSV), o histograma do heap mostrou 1.000.000 de objetos `org.postgresql.core.Tuple` vivos, o que combina com o driver guardando o resultado inteiro. Chame `run()` ou o serviço de relatórios de dentro de uma transação para obter os ~12 MB constantes mostrados acima.
-- **Streaming custa tempo.** Dentro de transação, 1 milhão de linhas levou 1.993 ms contra 1.608 ms sem ela (leitura por cursor em lotes de 1000). O mesmo acontece na exportação XLSX (14.880 ms contra 13.360 ms).
-- **Tabelas pequenas.** Com 100.000 linhas a biblioteca não foi mais lenta que a versão ingênua neste cenário. Tamanhos abaixo de 100.000 linhas não foram medidos.
-- A exportação XLSX ingênua estoura a memória com 100.000 linhas mesmo com 512m. Parte disso é o workbook em memória do Apache POI, e não só a lista de entidades. Os dois não foram medidos separadamente.
-- Uma execução do XLSX ingênuo (100.000 linhas, 512m) terminou sem gravar resultado. Ela conta como falha, e não como OOM, porque a causa não foi confirmada.
-- Não medido: 5 milhões de linhas, heaps acima de 512m (então só se sabe que o tamanho em que a versão ingênua falha fica entre 100.000 e 1.000.000 de linhas com 512m), outros tamanhos de chunk, outros coletores de lixo, outros bancos de dados e um laço manual com cursor, sem a biblioteca.
-- Os números vêm de um único notebook, com o banco em contêiner na mesma máquina e outros programas abertos. Use-os como ordem de grandeza, não como garantia.
+- **Streaming custa tempo.** Ler por cursor, em lotes de 1000, é mais lento do que carregar o resultado inteiro quando há memória: na execução anterior, antes da correção, 1 milhão de linhas levou 1.608 ms com o resultado inteiro em memória (329 MB), e cerca de 2.000 ms agora com 12 MB.
+- **Tabelas pequenas.** Com 100.000 linhas a biblioteca não foi mais lenta que a versão ingênua neste ambiente (278 ms contra 334 ms com 256m; 323 ms contra 329 ms com 512m). Tamanhos abaixo de 100.000 linhas não foram medidos.
+- **Transação de leitura aberta.** Enquanto o cursor está aberto, a biblioteca mantém uma transação de leitura na própria conexão. Em execuções muito longas isso pode impedir o PostgreSQL de limpar linhas alteradas depois que o cursor começou. Esse efeito não foi medido.
+- A exportação XLSX ingênua estoura a memória com 100.000 linhas mesmo com 512m. Parte disso é do workbook em memória do Apache POI, não só da lista de entidades. Os dois não foram medidos separadamente.
+- Uma execução do XLSX ingênuo (100.000 linhas, 512m) terminou sem gravar resultado. Ela conta como falha, não como OOM, porque a causa não foi confirmada.
+- Não medido: 5 milhões de linhas, heaps acima de 512m (então o tamanho exato em que a versão ingênua falha só se sabe estar entre 100.000 e 1.000.000 de linhas com 512m), outros tamanhos de chunk, outros coletores de lixo, outros bancos e um laço de cursor escrito à mão sem a biblioteca.
+- Os números vêm de um notebook, com o banco em contêiner na mesma máquina e outros programas rodando. Use-os pela ordem de grandeza, não como garantia.
 
 ### Como reproduzir
 

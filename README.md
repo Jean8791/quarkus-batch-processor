@@ -36,7 +36,7 @@ The usual `getResultList()` loads the whole result into memory, and every entity
 - dirty checking getting slower with every entity loaded;
 - a single long transaction holding locks and undo space for minutes.
 
-This library keeps **one chunk in memory at a time**, clears the persistence context after each chunk and, when asked, commits **one transaction per chunk**. On PostgreSQL, the one-chunk guarantee holds when `run()` is called from inside a transaction; see [Things to know](#things-to-know) and the [Benchmark](#benchmark).
+This library keeps **one chunk in memory at a time**, clears the persistence context after each chunk and, when asked, commits **one transaction per chunk**. On PostgreSQL the read goes through a real cursor: the library turns autocommit off on its own read connection while it runs, see [Things to know](#things-to-know) and the [Benchmark](#benchmark).
 
 ## Features
 
@@ -200,13 +200,13 @@ FastRecord finished | processor=InvoiceRecalc | entity=Invoice | processed=18234
 ## Things to know
 
 - **Detached records.** Entities read by a `StatelessSession` are not managed, and lazy associations cannot be loaded from them. Use `join fetch` in the query for the associations you need, or load what you want to change through your own `EntityManager` inside the consumer.
-- **PostgreSQL cursors.** The PostgreSQL JDBC driver only streams rows with a fetch size when autocommit is off. Outside of a transaction, Quarkus hands out connections in autocommit mode, so the driver fetches the whole result at once, and memory grows with the table (measured in the [Benchmark](#benchmark)). For large tables on PostgreSQL, call `run()` with `TransactionMode.NONE` from inside a transaction.
+- **PostgreSQL cursors.** The PostgreSQL JDBC driver only streams rows with a fetch size when autocommit is off, and outside a transaction Quarkus hands out connections in autocommit mode. While it reads, the library turns autocommit off on the cursor's own connection (and restores it afterwards), so memory stays constant without you opening a transaction. If you call `run()` from inside your own transaction, that connection is left as it is. Version 0.1.0 did not do this and buffered the whole result outside a transaction (see the [Changelog](CHANGELOG.md)).
 - **Persistence context.** The application's `EntityManager` is cleared after every chunk, so do not keep managed entities across chunks.
 - **One run, one thread.** A `Processor` is configured and run once, on the calling thread.
 
 ## Benchmark
 
-Does the library really keep one chunk in memory? Short answer: **yes, but only when `run()` is called inside a transaction on PostgreSQL**. Without one, the PostgreSQL driver loads the whole result set, and memory grows with the table (see [Known limits](#known-limits)).
+Does the library really keep one chunk in memory? Short answer: **yes**. In this benchmark memory stayed at about 12 MB for reads and about 20 MB for XLSX export from 100,000 to 1,000,000 rows, while the naive version ran out of memory at 1 million rows. These numbers are from after the fix described in the [Changelog](CHANGELOG.md): version 0.1.0 buffered the whole result when called outside a transaction (329 MB at 1 million rows in the earlier run).
 
 ### Methodology
 
@@ -215,7 +215,7 @@ Does the library really keep one chunk in memory? Short answer: **yes, but only 
 - Variants:
   - *Naive*: `createQuery(...).getResultList()` in a transaction, then iterate. The XLSX variant writes an in-memory `XSSFWorkbook`.
   - *Library (default)*: `FastRecordProcessor` with `TransactionMode.NONE`, called outside a transaction. The XLSX variant uses `ProcessorBackedReportService`.
-  - *Library inside a transaction*: the same call made from inside a transaction, as described in [Things to know](#things-to-know).
+  - *Library inside a transaction*: the same call made from inside a transaction, kept as a control.
   - `TransactionMode.CHUNK` was also measured for reads, see `benchmark/results/`.
 - Chunk size 1000. Each case runs in a **new JVM** with a fixed `-Xmx`. Inside it, a warm-up pass of 20,000 rows runs first, then a GC, then the measured pass.
 - 5 repetitions per case. **Repetition 1 is discarded**, and the table shows the **median of the other 4**.
@@ -231,7 +231,7 @@ Does the library really keep one chunk in memory? Short answer: **yes, but only 
 | OS | Linux 7.0.0-43-generic |
 | JVM | OpenJDK 17.0.9, G1 (default), no other flags |
 | PostgreSQL | 16.15 (`postgres:16-alpine`, default settings, same host) |
-| Library | 0.1.0 |
+| Library | 0.1.0 plus the cursor fix (commit `8f0d831`) |
 | `-Xmx` | 256m and 512m |
 
 Full details are in [`benchmark/results/environment.txt`](benchmark/results/environment.txt).
@@ -244,27 +244,27 @@ Each cell is median time / peak memory kept after GC. `OOM (4/4)` means `OutOfMe
 
 | Rows | `-Xmx` | Naive | Library (default) | Library inside a transaction |
 |---|---|---|---|---|
-| 100,000 | 256m | 327 ms / 107 MB | 239 ms / 43 MB | 280 ms / 12 MB |
-| 100,000 | 512m | 306 ms / 99 MB | 247 ms / 43 MB | 290 ms / 12 MB |
-| 1,000,000 | 256m | OOM (4/4) | OOM (4/4) | 1,976 ms / 12 MB |
-| 1,000,000 | 512m | OOM (4/4) | 1,608 ms / 329 MB | 1,993 ms / 12 MB |
+| 100,000 | 256m | 334 ms / 108 MB | 278 ms / 12 MB | 277 ms / 12 MB |
+| 100,000 | 512m | 329 ms / 97 MB | 323 ms / 12 MB | 289 ms / 12 MB |
+| 1,000,000 | 256m | OOM (4/4) | 1,965 ms / 12 MB | 2,033 ms / 12 MB |
+| 1,000,000 | 512m | OOM (4/4) | 2,058 ms / 12 MB | 1,956 ms / 12 MB |
 
 **XLSX export**
 
 | Rows | `-Xmx` | Naive | Library (default) | Library inside a transaction |
 |---|---|---|---|---|
-| 100,000 | 256m | OOM (4/4) | 1,470 ms / 50 MB | 1,535 ms / 20 MB |
-| 100,000 | 512m | OOM (3/4), 1 run without a result | 1,462 ms / 51 MB | 1,547 ms / 21 MB |
-| 1,000,000 | 256m | OOM (4/4) | OOM (4/4) | 14,891 ms / 20 MB |
-| 1,000,000 | 512m | OOM (4/4) | 13,360 ms / 333 MB | 14,880 ms / 20 MB |
+| 100,000 | 256m | OOM (4/4) | 1,546 ms / 20 MB | 1,544 ms / 20 MB |
+| 100,000 | 512m | OOM (3/4), 1 run without a result | 1,632 ms / 21 MB | 1,540 ms / 20 MB |
+| 1,000,000 | 256m | OOM (4/4) | 14,693 ms / 20 MB | 15,531 ms / 20 MB |
+| 1,000,000 | 512m | OOM (4/4) | 15,073 ms / 21 MB | 14,558 ms / 20 MB |
 
 The CSV files behind these tables are in [`benchmark/results/`](benchmark/results/): `results.csv` (every run) and `summary.csv` (medians).
 
 ### Known limits
 
-- **Default usage does not stream on PostgreSQL.** Called outside a transaction, the library kept 329 MB at 1 million rows (versus 43 MB at 100,000), so memory grows with the table, and it ran out of memory with 256m. `TransactionMode.CHUNK` behaves the same way (read results in `results.csv`). In a manual diagnostic run (one run, `-Xmx1g`, not part of the CSV), a heap histogram showed 1,000,000 live `org.postgresql.core.Tuple` objects, which matches the driver buffering the result. Call `run()` or the report service from inside a transaction to get the constant ~12 MB shown above.
-- **Streaming costs time.** Inside a transaction, 1 million rows took 1,993 ms against 1,608 ms without one (reading from a cursor in batches of 1000). The same happens in the XLSX export (14,880 ms against 13,360 ms).
-- **Small tables.** At 100,000 rows the library was not slower than the naive version in this setup. Sizes below 100,000 rows were not measured.
+- **Streaming costs time.** Reading through a cursor, in batches of 1000, is slower than buffering the whole result when memory allows it: in the earlier run, before the fix, 1 million rows took 1,608 ms with the whole result buffered (329 MB), and about 2,000 ms now with 12 MB.
+- **Small tables.** At 100,000 rows the library was not slower than the naive version in this setup (278 ms against 334 ms with 256m; 323 ms against 329 ms with 512m). Sizes below 100,000 rows were not measured.
+- **Open read transaction.** While the cursor is open, the library holds a read transaction on its own connection. On very long runs this can keep PostgreSQL from cleaning up rows changed since the cursor started. This effect was not measured.
 - The naive XLSX export runs out of memory at 100,000 rows even with 512m. Part of that is Apache POI's in-memory workbook, not only the list of entities. The two were not measured separately.
 - One XLSX naive run (100,000 rows, 512m) ended without writing a result. It is counted as a failure, not as an OOM, because the cause was not confirmed.
 - Not measured: 5 million rows, heaps above 512m (so the exact size where the naive version fails is only known to be between 100,000 and 1,000,000 rows at 512m), other chunk sizes, other garbage collectors, other databases, and a hand-written cursor loop without the library.
