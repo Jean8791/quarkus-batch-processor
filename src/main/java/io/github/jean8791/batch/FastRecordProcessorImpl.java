@@ -166,6 +166,7 @@ final class FastRecordProcessorImpl<T> implements Processor<T> {
                 .unwrap(SessionFactory.class);
 
         try (StatelessSession statelessSession = sessionFactory.openStatelessSession();
+             ManualCommitScope manualCommit = ManualCommitScope.open(statelessSession);
              CursorIterator<T> iterator = config.nativeMode()
                      ? buildNativeIterator(statelessSession, config)
                      : buildHqlIterator(statelessSession, config)) {
@@ -460,6 +461,44 @@ final class FastRecordProcessorImpl<T> implements Processor<T> {
                     processed,
                     totalRead
             );
+        }
+    }
+
+    /**
+     * The PostgreSQL driver only reads through a cursor, a fetch at a time, when the connection is not in
+     * autocommit. Outside a transaction the session gets an autocommit connection and the driver would buffer
+     * the whole result set, so autocommit is turned off while the cursor is open and restored afterwards.
+     * A connection that already belongs to the caller's transaction is left untouched.
+     */
+    private static final class ManualCommitScope implements AutoCloseable {
+
+        private final StatelessSession session;
+        private final boolean changed;
+
+        private ManualCommitScope(StatelessSession session, boolean changed) {
+            this.session = session;
+            this.changed = changed;
+        }
+
+        static ManualCommitScope open(StatelessSession session) {
+            boolean[] changed = {false};
+            session.doWork(connection -> {
+                if (connection.getAutoCommit()) {
+                    connection.setAutoCommit(false);
+                    changed[0] = true;
+                }
+            });
+            return new ManualCommitScope(session, changed[0]);
+        }
+
+        @Override
+        public void close() {
+            if (changed) {
+                session.doWork(connection -> {
+                    connection.rollback();
+                    connection.setAutoCommit(true);
+                });
+            }
         }
     }
 

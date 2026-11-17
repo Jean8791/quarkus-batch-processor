@@ -1,4 +1,4 @@
-date_utc: 2026-11-16T23:14Z
+date_utc: 2026-11-17T00:34Z
 cpu: 12th Gen Intel(R) Core(TM) i7-12650H (16 logical cores)
 ram: 31Gi total
 os: Linux 7.0.0-43-generic
@@ -6,7 +6,7 @@ java: openjdk version "17.0.9" 2023-10-17
 postgresql: PostgreSQL 16.15 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
 postgres_image: postgres:16-alpine
 docker: Docker version 29.9.3, build 5457199
-library: 0.1.0 (commit 3ae65cf)
+library: 0.1.0 (commit 8f0d831)
 jvm_flags: -Xmx per case; default GC (G1), no other flags
 chunk_size: 1000
 repetitions: 5 (first one per case is discarded as warm-up of the machine and the database)
